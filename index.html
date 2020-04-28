@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+
+    <style type="text/css">
+        * {
+            margin: 0;
+            padding: 0;
+        }
+    </style>
+
+</head>
+<body>
+<button onclick="start()">Start stream</button>
+<button onclick="stop()">Stop stream</button>
+<select id="select" onchange="select(this.value)"></select>
+<div>
+    <div style="display: flex; margin-right: 10px">
+        <p style="margin-right: 5px">Instant fps:</p>
+        <p id="fps" style="width: 50px">0</p>
+    </div>
+    <div style="display: flex; margin-right: 10px">
+        <p style="margin-right: 5px">Number of frames:</p>
+        <p id="frames" style="width: 50px">0</p>
+    </div>
+    <div style="display: flex; margin-right: 10px">
+        <p style="margin-right: 5px">Execution time originalCanvas.drawFrame, ms</p>
+        <p id="originalCanvas" style="width: 50px">0</p>
+    </div>
+    <div style="display: flex; margin-right: 10px">
+        <p style="margin-right: 5px">Execution time scaledCanvas.drawFrame, ms</p>
+        <p id="scaledCanvas" style="width: 50px">0</p>
+    </div>
+    <div style="display: flex; margin-right: 10px">
+        <p style="margin-right: 5px">Execution time scaledCanvas.getBmpData, ms</p>
+        <p id="scaledCanvasData" style="width: 50px">0</p>
+    </div>
+    <div style="display: flex; margin-right: 10px">
+        <p style="margin-right: 5px">Fake calculation time, ms</p>
+        <p id="fakeCalculationTime" style="width: 50px">0</p>
+    </div>
+</div>
+
+<div class="item">
+    <video id="video" autoplay="autoplay"></video>
+</div>
+
+<script>
+    // Input video
+    const video = document.getElementById('video');
+    video.style.width = `${window.innerWidth}px`;
+    video.style.height = '400px';
+
+    // Measurement
+    // The average number of frames processed per second
+    const fps = document.getElementById('fps');
+    // The total number of processed frames
+    const frames = document.getElementById('frames');
+    // The average time of drawing original frame from video stream
+    const originalCanvasEl = document.getElementById('originalCanvas');
+    // The average time of drawing scaled frame from video stream
+    const scaledCanvasEl = document.getElementById('scaledCanvas');
+    // The average time of getting data from scaled frame
+    const scaledCanvasDataEl = document.getElementById('scaledCanvasData');
+    // The average time of fake calculation
+    const fakeCalculationTimeE1 = document.getElementById('fakeCalculationTime');
+
+    // List of available cameras
+    const selectList = document.getElementById("select");
+    // Resolution of original frame and video
+    const width = 1920;
+    const height = 1080;
+    // Resolution of scaled frame
+    const scaledWidth = Math.floor(400 / Math.min(width, height) * width);
+    const scaledHeight = Math.floor(400 / Math.min(width, height) * height);
+
+    let isRunning = false;
+    let startTimeStamp = 0;
+    let numberOfProcessedFrames = 0;
+    let totalFakeCalculationTime = 0;
+    let cameraSelected = null;
+    let originalCanvas, scaledCanvas, bestCanvas, currentStream;
+
+    /**
+     * Start obtaining list of available cameras
+     */
+    navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
+        stream.getTracks().forEach((track) => track.stop());
+    });
+
+    const select = (value) => {
+        cameraSelected = value;
+    };
+
+    const getSelectWithCameras = async () => {
+        const cameras = await navigator.mediaDevices
+            .enumerateDevices()
+            .then((devices) =>
+                (devices).filter(
+                    (device) => device.kind === 'videoinput'
+                )
+            );
+
+        cameras.forEach((camera, index) => {
+            let option = document.createElement("option");
+            option.value = camera.deviceId;
+            option.text = camera.label;
+            selectList.appendChild(option);
+
+            if (index === 0) cameraSelected = camera.deviceId;
+        });
+    };
+
+    getSelectWithCameras();
+    /** Finish obtaining list of available cameras */
+
+    // Start image capturing.
+    const start = () => {
+        const fullHDOptions = {
+            video: {
+                width: {exact: width},
+                height: {exact: height},
+                deviceId: cameraSelected,
+                },
+            audio: false
+        };
+
+        navigator.mediaDevices.getUserMedia(fullHDOptions)
+            .then((stream) => {
+                currentStream = stream;
+                video.srcObject = currentStream;
+
+                startTimeStamp = 0;
+                numberOfProcessedFrames = 0
+                isRunning = true;
+
+                // original image
+                originalCanvas = new CanvasHelper(width, height);
+                // resized image (performance)
+                scaledCanvas = new CanvasHelper(scaledWidth, scaledHeight);
+                // best image
+                bestCanvas = new CanvasHelper(width, height);
+
+                captureNextFrame();
+            })
+            .catch(function (err) {
+                console.log("An error occurred: " + err);
+            });
+    };
+
+    const stop = () => {
+        if (currentStream) {
+            currentStream.getTracks().forEach((track) => {
+                track.stop();
+                isRunning = false;
+            });
+        }
+    };
+
+    /**
+     * draw frame from video
+     */
+    const captureNextFrame = () => {
+        if (!isRunning) return;
+
+        originalCanvas.drawFrame(video, originalCanvasEl);
+        scaledCanvas.drawFrame(video, scaledCanvasEl);
+
+        const image = scaledCanvas.getBmpData(scaledCanvasDataEl);
+        // Perform some calculation with data in order to avoid optimization in canvases
+        let startTime = Date.now();
+        const someCalculationResult = image.data.reduce((a, b) => a + b, 0);
+        totalFakeCalculationTime += Date.now() - startTime;
+        if (someCalculationResult % 5 === 0) {
+            bestCanvas.drawFrame(originalCanvas.canvas);
+        }
+
+        drawFPS();
+        drawFrames();
+        drawCalculationTime();
+        numberOfProcessedFrames++;
+
+        requestAnimationFrame(captureNextFrame);
+    };
+
+    const drawFPS = () => {
+        if( numberOfProcessedFrames == 0 ) {
+            //We discard first timestamp for more precision calculation
+            startTimeStamp = Date.now();
+        } else {
+            // Update fps each 3 frames in order to avoid quick changing value
+            if ((numberOfProcessedFrames + 1) % 3 === 0) {
+                fps.innerText = (1000 * numberOfProcessedFrames/ (Date.now() - startTimeStamp)).toFixed(1);
+            }
+        }
+    };
+
+    const drawFrames = () => {
+        frames.innerText = numberOfProcessedFrames;
+    };
+
+    const drawCalculationTime = () => {
+        fakeCalculationTimeE1.innerText = Math.floor( totalFakeCalculationTime / numberOfProcessedFrames + 1 );
+    }
+
+    /**
+     * helper class to work with canvas, that is not shown to user
+     */
+    class CanvasHelper {
+        constructor(width, height) {
+            this.width = width;
+            this.height = height;
+
+            this.canvas = document.createElement('canvas');
+            this.canvas.width = width;
+            this.canvas.style.width = width + 'px';
+            this.canvas.height = height;
+            this.canvas.style.height = height + 'px';
+            this.context = this.canvas.getContext('2d');
+
+            // Total time of processing of current operation
+            this.getBmpDataProcessingTime = 0;
+            this.getBmpDataProcessingCount = 0;
+            this.drawFrameProcessingTime = 0;
+            this.drawFrameProcessingCount = 0;
+        }
+
+        getBmpData(HTMLElem) {
+            this.getBmpDataProcessingCount++;
+            const startTime = Date.now();
+            const data = this.context.getImageData(0, 0, this.width, this.height);
+            this.getBmpDataProcessingTime += Date.now() - startTime;
+
+            HTMLElem.innerText = Math.floor( this.getBmpDataProcessingTime / this.getBmpDataProcessingCount );
+
+            return data;
+        }
+
+        drawFrame(videoEl, HTMLElem) {
+            this.drawFrameProcessingCount++;
+            const startTime = Date.now();
+            this.context.drawImage(videoEl, 0, 0, this.width, this.height);
+            this.drawFrameProcessingTime += Date.now() - startTime;
+
+            if (HTMLElem) {
+                HTMLElem.innerText = Math.floor( this.drawFrameProcessingTime / this.drawFrameProcessingCount );
+            }
+        }
+    }
+</script>
+
+</body>
+</html>
