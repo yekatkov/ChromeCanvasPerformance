@@ -13,6 +13,7 @@
 
 </head>
 <body>
+<br><br>
 <button onclick="start()">Start stream</button>
 <button onclick="stop()">Stop stream</button>
 <select id="select" onchange="select(this.value)"></select>
@@ -41,17 +42,31 @@
         <p style="margin-right: 5px">Fake calculation time, ms</p>
         <p id="fakeCalculationTime" style="width: 50px">0</p>
     </div>
+    <div style="display: flex; margin-right: 10px">
+        <p style="margin-right: 5px">Original size: </p>
+        <p id="VideoStreamSize" style="width: 50px">0</p>
+    </div>
+    <div style="display: flex; margin-right: 10px">
+        <p style="margin-right: 5px">Original size: </p>
+        <p id="OriginalSize" style="width: 50px">0</p>
+    </div>
+    <div style="display: flex; margin-right: 10px">
+        <p style="margin-right: 5px">Scaled size: </p>
+        <p id="ScaledSize" style="width: 50px">0</p>
+    </div>
 </div>
 
 <div class="item">
     <video id="video" autoplay="autoplay"></video>
 </div>
 
+<div class="item">
+    <canvas id="BestFrameCanvas" width="100" height="100"></canvas>
+</div>
+
 <script>
     // Input video
     const video = document.getElementById('video');
-    video.style.width = `${window.innerWidth}px`;
-    video.style.height = '400px';
 
     // Measurement
     // The average number of frames processed per second
@@ -66,12 +81,15 @@
     const scaledCanvasDataEl = document.getElementById('scaledCanvasData');
     // The average time of fake calculation
     const fakeCalculationTimeE1 = document.getElementById('fakeCalculationTime');
+    // Canvas for drawing of best frame 
+    let bestCanvas = document.getElementById('BestFrameCanvas');
+    let bestCanvasCtx = bestCanvas.getContext('2d');
 
     // List of available cameras
     const selectList = document.getElementById("select");
-    // Resolution of original frame and video
-    const width = 1920;
-    const height = 1080;
+    // Resolution of original frame and video ( we hope to get 4K )
+    const width = 3840;
+    const height = 2160;
     // Resolution of scaled frame
     const scaledWidth = Math.floor(400 / Math.min(width, height) * width);
     const scaledHeight = Math.floor(400 / Math.min(width, height) * height);
@@ -81,7 +99,7 @@
     let numberOfProcessedFrames = 0;
     let totalFakeCalculationTime = 0;
     let cameraSelected = null;
-    let originalCanvas, scaledCanvas, bestCanvas, currentStream;
+    let originalCanvas, scaledCanvas, currentStream;
 
     /**
      * Start obtaining list of available cameras
@@ -120,8 +138,8 @@
     const start = () => {
         const fullHDOptions = {
             video: {
-                width: {exact: width},
-                height: {exact: height},
+                width: {ideal: width},
+                height: {ideal: height},
                 deviceId: cameraSelected,
                 },
             audio: false
@@ -129,6 +147,18 @@
 
         navigator.mediaDevices.getUserMedia(fullHDOptions)
             .then((stream) => {
+
+                const {videoStreamWidth = width, videoStreamHeight = height} = stream.getTracks()[0].getSettings();
+                // Set canvas optput
+                const videoPreviewWidth = window.innerWidth / 2;
+                const videoPreviewHeight = videoStreamHeight * ( videoPreviewWidth / videoStreamWidth );
+                video.style.width = `${videoPreviewWidth}px`;
+                video.style.height = `${videoPreviewHeight}px`;
+                bestCanvas.width = videoPreviewWidth;
+                bestCanvas.height = videoPreviewHeight;
+                bestCanvasCtx.width = videoPreviewWidth;
+                bestCanvasCtx.height = videoPreviewHeight;
+
                 currentStream = stream;
                 video.srcObject = currentStream;
 
@@ -140,9 +170,10 @@
                 originalCanvas = new CanvasHelper(width, height);
                 // resized image (performance)
                 scaledCanvas = new CanvasHelper(scaledWidth, scaledHeight);
-                // best image
-                bestCanvas = new CanvasHelper(width, height);
 
+                document.getElementById('VideoStreamSize').innerText = `${videoStreamWidth}x${videoStreamHeight}`;
+                document.getElementById('OriginalSize').innerText = `${width}x${height}`;
+                document.getElementById('ScaledSize').innerText =`${scaledWidth}x${scaledHeight}`;
                 captureNextFrame();
             })
             .catch(function (err) {
@@ -174,7 +205,8 @@
         const someCalculationResult = image.data.reduce((a, b) => a + b, 0);
         totalFakeCalculationTime += Date.now() - startTime;
         if (someCalculationResult % 5 === 0) {
-            bestCanvas.drawFrame(originalCanvas.canvas);
+            // We will get the best frame approximately every 5 frames.
+            bestCanvasCtx.drawImage(originalCanvas.canvas, 0, 0, bestCanvasCtx.width, bestCanvasCtx.height );
         }
 
         drawFPS();
